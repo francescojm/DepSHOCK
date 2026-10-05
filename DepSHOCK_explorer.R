@@ -1,202 +1,105 @@
-DepSHOCK_obj<-readRDS('/Volumes/iorio/raw_data_inHouse/DepSHOCK/bulkRNAseq/depshock_dataset.rds')
 
 library(dplyr)
 library(ggplot2)
 
-## ============================================================
-## 1. Extract the three components of the DepSHOCK object
-## ============================================================
+source('DepSHOCK_library.R')
 
-lfc  <- DepSHOCK_obj$logFC
-padj <- DepSHOCK_obj$padj
-meta <- DepSHOCK_obj$metadata
+DS_data<-DS_loading_and_formatting()
+X<-DS_create_analysis_matrix(DS_data$lfc,DS_data$padj)
+
+PCA<-DS_pca(X)
 
 
-## ============================================================
-## 2. Make sure metadata and matrices are aligned
-## ============================================================
+par(mfrow=c(2,2))
+DS_plot_pca(PCA,meta = DS_data$metadata,pc1 = 1,pc2 = 2,color_by = 'oncogene_cellline')
+DS_plot_pca(PCA,meta = DS_data$metadata,pc1 = 2,pc2 = 3,color_by = 'oncogene_cellline')
+DS_plot_pca(PCA,meta = DS_data$metadata,pc1 = 1,pc2 = 3,color_by = 'oncogene_cellline')
+DS_plot_pca(legend_only = TRUE,meta = meta,color_by = 'oncogene_cellline')
 
-meta <- meta[
-  match(rownames(lfc), meta$guide_id),
-]
 
-stopifnot(
-  identical(rownames(lfc), rownames(padj)),
-  identical(colnames(lfc), colnames(padj)),
-  identical(rownames(lfc), meta$guide_id)
+par(mfrow=c(2,2))
+DS_plot_pca(PCA,meta = DS_data$metadata,pc1 = 1,pc2 = 2,color_by = 'time')
+DS_plot_pca(PCA,meta = DS_data$metadata,pc1 = 2,pc2 = 3,color_by = 'time')
+DS_plot_pca(PCA,meta = DS_data$metadata,pc1 = 1,pc2 = 3,color_by = 'time')
+DS_plot_pca(legend_only = TRUE,meta = meta,color_by = 'time')
+
+par(mfrow=c(2,2))
+DS_plot_pca(PCA,meta = DS_data$metadata,pc1 = 1,pc2 = 2)
+DS_plot_pca(PCA,meta = DS_data$metadata,pc1 = 2,pc2 = 3)
+DS_plot_pca(PCA,meta = DS_data$metadata,pc1 = 1,pc2 = 3)
+DS_plot_pca(legend_only = TRUE)
+
+DS_plot_pca_by_time(
+  pca = pca,
+  meta = meta,
+  color_by = "oncogene_cellline"
 )
 
-
-## ============================================================
-## 3. Calculate basic transcriptional-response metrics
-## ============================================================
-
-## Number of DE genes, padj < 0.05
-meta$n_DEG <- rowSums(
-  padj < 0.05,
-  na.rm = TRUE
+DS_plot_pca_by_time(
+  pca = pca,
+  meta = meta,
+  color_by = "perturbation"
 )
 
-## Number of significantly upregulated genes
-meta$n_up <- rowSums(
-  padj < 0.05 & lfc > 0,
-  na.rm = TRUE
+DS_plot_pca_by_cellline_perturbation(
+  pca = pca,
+  meta = meta,
+  cell_lines = "M14"
 )
 
-## Number of significantly downregulated genes
-meta$n_down <- rowSums(
-  padj < 0.05 & lfc < 0,
-  na.rm = TRUE
+DSB_obj <- DS_compute_DSB_component(
+  lfc,
+  meta
 )
 
-## Overall magnitude of the transcriptional response:
-## Euclidean norm of the logFC vector
-meta$response_norm <- sqrt(
-  rowSums(lfc^2, na.rm = TRUE)
+DSB_mat <- DSB_obj$DSB
+DSB_meta <- DSB_obj$metadata
+
+
+
+DSB_similarity <- DS_compare_DSB_similarity(
+  lfc,
+  meta,
+  DSB_obj
 )
 
-
-## ============================================================
-## 4. Define perturbation classes
-## ============================================================
-
-## Change "NT" here if the target has a different label
-control_targets <- c("AAVS1", "RPL15", "NT")
-
-meta$type <- ifelse(
-  meta$target == "RPL15", "RPL15",
-  ifelse(
-    meta$target == "AAVS1", "AAVS1",
-    ifelse(
-      meta$target == "NT", "Non-targeting",
-      "Oncogene"
-    )
-  )
+aggregate(
+  cbind(
+    raw_AAVS1_cosine,
+    DSB_cosine
+  ) ~ time_h,
+  data = DSB_similarity,
+  FUN = mean
 )
 
-
-## Quick check
-table(meta$target, meta$type)
-
-## ============================================================
-## 5. Colours
-## ============================================================
-
-cols <- c(
-  "Oncogene"      = "#2166AC",
-  "RPL15"         = "#B2182B",
-  "AAVS1"         = "#4D9221",
-  "Non-targeting" = "grey55"
+common_obj <- DS_compute_common_trace(
+  lfc,
+  meta,
+  exclude_targets = "NT",
+  consensus = "median"
 )
 
-
-## ============================================================
-## 6. Function for longitudinal plots
-## ============================================================
-
-plot_trajectories <- function(meta, variable, ylab) {
-
-  cell_lines <- unique(meta$cell_line)
-
-  n <- length(cell_lines)
-
-  nc <- ceiling(sqrt(n))
-  nr <- ceiling(n / nc)
-
-  oldpar <- par(
-    mfrow = c(nr, nc),
-    mar = c(4, 4.5, 3, 1),
-    oma = c(0, 0, 0, 0),
-    bty = "n"
+common_NT_similarity <-
+  DS_validate_common_trace_with_NT(
+    common_obj,
+    lfc,
+    meta
   )
 
-  for (cl in cell_lines) {
+aggregate(
+  cosine_common_NT ~ time_h,
+  data = common_NT_similarity,
+  FUN = mean
+)
 
-    d <- meta[meta$cell_line == cl, ]
-
-    oncogene <- unique(
-      d$target[d$type == "Oncogene"]
-    )
-
-    oncogene <- paste(oncogene, collapse = "/")
-
-    y <- d[[variable]]
-
-    plot(
-      NA,
-      xlim = range(d$time_h, na.rm = TRUE),
-      ylim = range(y, na.rm = TRUE),
-      xlab = "Time after Cas9 activation (h)",
-      ylab = ylab,
-      main = paste0(cl, " — ", oncogene),
-      xaxt = "n"
-    )
-
-    axis(
-      1,
-      at = sort(unique(d$time_h))
-    )
-
-    for (g in unique(d$guide)) {
-
-      dg <- d[d$guide == g, ]
-      dg <- dg[order(dg$time_h), ]
-
-      type_g <- unique(dg$type)
-
-      lines(
-        dg$time_h,
-        dg[[variable]],
-        type = "b",
-        pch = 16,
-        lwd = 2,
-        col = cols[type_g]
-      )
-    }
-
-    box()
-  }
-
-  ## Shared legend
-  par(xpd = NA)
-
-  legend(
-    "right",
-    inset = c(-1, -0.05),
-    legend = names(cols),
-    col = cols,
-    lwd = 2,
-    pch = 16,
-    horiz = FALSE,
-    bty = "n",
-    xpd = NA
+common_similarity <-
+  DS_compare_common_trace(
+    common_obj
   )
 
-  par(oldpar)
-}
-
-plot_trajectories(
-  meta,
-  variable = "response_norm",
-  ylab = "Transcriptional response magnitude"
+aggregate(
+  cosine ~ time_h,
+  data = common_similarity,
+  FUN = mean
 )
 
-plot_trajectories(
-  meta,
-  variable = "n_DEG",
-  ylab = "Number of differentially expressed genes"
-)
-
-padj < 0.05
-
-plot_trajectories(
-  meta,
-  variable = "n_up",
-  ylab = "Number of upregulated genes"
-)
-
-plot_trajectories(
-  meta,
-  variable = "n_down",
-  ylab = "Number of downregulated genes"
-)
